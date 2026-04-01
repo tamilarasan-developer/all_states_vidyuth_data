@@ -4,6 +4,8 @@ import time
 import json
 from datetime import datetime
 from playwright.sync_api import sync_playwright
+import mysql.connector
+import time
 
 STATES = [
     {
@@ -39,6 +41,39 @@ STATES = [
 ]
 
 XPATH_TIME_BLOCK = '/html/body/table/tbody/tr[1]/td/table/tbody/tr[2]/td/table/tbody/tr/td[2]'
+
+
+def get_db_connection():
+    db_user = os.getenv("DB_USER", "tamil")
+    db_password = os.getenv("DB_PASSWORD", "Tamil@321")
+    db_name = os.getenv("DB_NAME", "vidyuthdata")
+    db_port = int(os.getenv("DB_PORT", "3306"))
+
+    # Try env host first, then common Docker/Linux host routes.
+    hosts_to_try = [
+        os.getenv("DB_HOST", "host.docker.internal"),
+        "host.docker.internal",
+        "172.17.0.1",
+        "127.0.0.1",
+        "localhost",
+    ]
+
+    last_error = None
+    for host in hosts_to_try:
+        try:
+            return mysql.connector.connect(
+                host=host,
+                user=db_user,
+                password=db_password,
+                database=db_name,
+                port=db_port,
+                connection_timeout=10,
+            )
+        except Exception as e:
+            last_error = e
+            print(f"⚠️ DB connect failed on host '{host}': {e}")
+
+    raise last_error
 
 
 def normalize_mw_value(raw_text):
@@ -134,6 +169,40 @@ def scrape_state(page, state, folder_path):
     except Exception as e:
         print(f"❌ Error in {state['name']}:", e)
         return None
+    
+
+def insert_into_db(data):
+    try:
+        conn = get_db_connection()
+
+        cursor = conn.cursor()
+
+        query = """
+        INSERT INTO demand_data (
+            state, current_demand, yesterday_demand,
+            time_block, date, captured_at
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        """
+
+        values = (
+            data["state"],
+            data["current_demand_mw"],
+            data["yesterday_demand_mw"],
+            data["time_block"],
+            data["date"],
+            data["captured_at"]
+        )
+
+        cursor.execute(query, values)
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        print("✅ Saved to DB:", data["state"])
+
+    except Exception as e:
+        print("❌ DB Error:", e)
 
 
 def main():
@@ -163,6 +232,7 @@ def main():
             row = scrape_state(pages[state["name"]], state, screenshot_folder)
             if row:
                 output_rows.append(row)
+                insert_into_db(row)
 
         browser.close()
 
@@ -176,6 +246,7 @@ def main():
     print(f"📁 JSON folder: {json_folder}")
 
     print(f"\n🚀 Total Time: {round(time.time() - start, 2)} seconds")
+    print("🚀 Script started at:", time.strftime("%H:%M:%S"))
 
 
 if __name__ == "__main__":
