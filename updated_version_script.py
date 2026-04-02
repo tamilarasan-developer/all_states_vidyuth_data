@@ -2,10 +2,10 @@ import re
 import os
 import time
 import json
-from datetime import datetime
+import shutil
+from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import mysql.connector
-import time
 
 STATES = [
     {
@@ -50,13 +50,16 @@ def get_db_connection():
     db_port = int(os.getenv("DB_PORT", "3306"))
 
     # Try env host first, then common Docker/Linux host routes.
-    hosts_to_try = [
+    hosts_to_try = []
+    for host in [
         os.getenv("DB_HOST", "host.docker.internal"),
         "host.docker.internal",
         "172.17.0.1",
         "127.0.0.1",
         "localhost",
-    ]
+    ]:
+        if host and host not in hosts_to_try:
+            hosts_to_try.append(host)
 
     last_error = None
     for host in hosts_to_try:
@@ -171,6 +174,29 @@ def scrape_state(page, state, folder_path):
         return None
     
 
+def cleanup_old_files(base_path, days=2):
+    """Delete directories older than specified days."""
+    try:
+        if not os.path.exists(base_path):
+            return
+        
+        now = datetime.now()
+        cutoff_time = now - timedelta(days=days)
+        
+        for folder_name in os.listdir(base_path):
+            folder_path = os.path.join(base_path, folder_name)
+            
+            if os.path.isdir(folder_path):
+                folder_mtime = datetime.fromtimestamp(os.path.getmtime(folder_path))
+                
+                if folder_mtime < cutoff_time:
+                    print(f"🗑️ Deleting old folder: {folder_path}")
+                    shutil.rmtree(folder_path)
+                    print(f"✅ Deleted: {folder_name}")
+    except Exception as e:
+        print(f"⚠️ Cleanup error: {e}")
+
+
 def insert_into_db(data):
     try:
         conn = get_db_connection()
@@ -207,6 +233,11 @@ def insert_into_db(data):
 
 def main():
     start = time.time()
+    current_now = datetime.now().astimezone()
+    print(f"🕒 Local time: {current_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    
+    # Clean up files older than 2 days before starting new scrape
+    cleanup_old_files("downloads", days=2)
     
     # Unpack the 3 variables returned by get_run_folders()
     screenshot_folder, json_folder, run_timestamp = get_run_folders()
@@ -246,7 +277,7 @@ def main():
     print(f"📁 JSON folder: {json_folder}")
 
     print(f"\n🚀 Total Time: {round(time.time() - start, 2)} seconds")
-    print("🚀 Script started at:", time.strftime("%H:%M:%S"))
+    print("🚀 Script started at:", current_now.strftime("%H:%M:%S %Z"))
 
 
 if __name__ == "__main__":
