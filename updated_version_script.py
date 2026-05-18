@@ -5,7 +5,7 @@ import json
 import shutil
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
-import mysql.connector
+import psycopg2
 
 STATES = [
     {
@@ -44,19 +44,21 @@ XPATH_TIME_BLOCK = '/html/body/table/tbody/tr[1]/td/table/tbody/tr[2]/td/table/t
 
 
 def get_db_connection():
-    db_user = os.getenv("DB_USER", "tamil")
-    db_password = os.getenv("DB_PASSWORD", "Tamil@321")
-    db_name = os.getenv("DB_NAME", "vidyuthdata")
-    db_port = int(os.getenv("DB_PORT", "3306"))
+    db_user = os.getenv("DB_USER", "postgres")
+    db_password = os.getenv("DB_PASSWORD", "LGEcbe@26")
+    db_name = os.getenv("DB_NAME", "vidyuth_all_states")
+    db_port = int(os.getenv("DB_PORT", "5432"))
+
+
 
     # Try env host first, then common Docker/Linux host routes.
     hosts_to_try = []
     for host in [
-        os.getenv("DB_HOST", "host.docker.internal"),
-        "host.docker.internal",
-        "172.17.0.1",
+        os.getenv("DB_HOST", "172.16.7.116"),
+        "172.16.7.116",
         "127.0.0.1",
         "localhost",
+        "host.docker.internal",
     ]:
         if host and host not in hosts_to_try:
             hosts_to_try.append(host)
@@ -64,13 +66,13 @@ def get_db_connection():
     last_error = None
     for host in hosts_to_try:
         try:
-            return mysql.connector.connect(
+            return psycopg2.connect(
                 host=host,
                 user=db_user,
                 password=db_password,
-                database=db_name,
+                dbname=db_name,
                 port=db_port,
-                connection_timeout=10,
+                connect_timeout=10,
             )
         except Exception as e:
             last_error = e
@@ -197,6 +199,28 @@ def cleanup_old_files(base_path, days=2):
         print(f"⚠️ Cleanup error: {e}")
 
 
+def init_db():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        query = """
+        CREATE TABLE IF NOT EXISTS demand_data (
+            id SERIAL PRIMARY KEY,
+            state VARCHAR(100),
+            current_demand INT,
+            yesterday_demand INT,
+            time_block VARCHAR(100),
+            date DATE,
+            captured_at TIMESTAMP
+        )
+        """
+        cursor.execute(query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ DB Init Error: {e}")
+
 def insert_into_db(data):
     try:
         conn = get_db_connection()
@@ -236,6 +260,9 @@ def main():
     current_now = datetime.now().astimezone()
     print(f"🕒 Local time: {current_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     
+    # Ensure DB tables exist
+    init_db()
+
     # Clean up files older than 2 days before starting new scrape
     cleanup_old_files("downloads", days=2)
     
